@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { google } from "googleapis";
 import express from "express";
 import { z } from "zod";
@@ -16,83 +16,76 @@ const auth = new google.auth.GoogleAuth({
 
 const gsc = google.searchconsole({ version: "v1", auth });
 
-const server = new McpServer({ name: "synertech-gsc", version: "1.0.0" });
+function buildServer() {
+  const server = new McpServer({ name: "synertech-gsc", version: "1.0.0" });
 
-server.tool(
-  "list_sites",
-  "List all GSC properties this service account has access to",
-  {},
-  async () => {
-    const res = await gsc.sites.list();
-    const sites = res.data.siteEntry || [];
-    return {
-      content: [{ type: "text", text: sites.map(s => `${s.siteUrl} (${s.permissionLevel})`).join("\n") || "No sites found" }],
-    };
-  }
-);
+  server.tool(
+    "list_sites",
+    "List all GSC properties accessible to this service account",
+    {},
+    async () => {
+      const res = await gsc.sites.list();
+      const sites = res.data.siteEntry || [];
+      return {
+        content: [{ type: "text", text: sites.map(s => `${s.siteUrl} (${s.permissionLevel})`).join("\n") || "No sites found" }],
+      };
+    }
+  );
 
-server.tool(
-  "search_analytics",
-  "Query GSC search analytics — clicks, impressions, CTR, position",
-  {
-    siteUrl: z.string().describe("Site URL e.g. https://serdenco.com/"),
-    startDate: z.string().describe("Start date YYYY-MM-DD"),
-    endDate: z.string().describe("End date YYYY-MM-DD"),
-    dimensions: z.array(z.enum(["query", "page", "country", "device"])).optional().describe("Group by dimensions, default: query"),
-    rowLimit: z.number().optional().describe("Max rows, default 25"),
-  },
-  async ({ siteUrl, startDate, endDate, dimensions, rowLimit }) => {
-    const res = await gsc.searchanalytics.query({
-      siteUrl,
-      requestBody: {
-        startDate,
-        endDate,
-        dimensions: dimensions || ["query"],
-        rowLimit: rowLimit || 25,
-      },
-    });
-    return {
-      content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }],
-    };
-  }
-);
+  server.tool(
+    "search_analytics",
+    "Query GSC search analytics — clicks, impressions, CTR, position",
+    {
+      siteUrl: z.string().describe("Site URL e.g. https://serdenco.com/"),
+      startDate: z.string().describe("Start date YYYY-MM-DD"),
+      endDate: z.string().describe("End date YYYY-MM-DD"),
+      dimensions: z.array(z.enum(["query", "page", "country", "device"])).optional().describe("Group by, default: query"),
+      rowLimit: z.number().optional().describe("Max rows, default 25"),
+    },
+    async ({ siteUrl, startDate, endDate, dimensions, rowLimit }) => {
+      const res = await gsc.searchanalytics.query({
+        siteUrl,
+        requestBody: {
+          startDate,
+          endDate,
+          dimensions: dimensions || ["query"],
+          rowLimit: rowLimit || 25,
+        },
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }],
+      };
+    }
+  );
 
-server.tool(
-  "list_sitemaps",
-  "List sitemaps for a GSC property",
-  {
-    siteUrl: z.string().describe("Site URL"),
-  },
-  async ({ siteUrl }) => {
-    const res = await gsc.sitemaps.list({ siteUrl });
-    return {
-      content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }],
-    };
-  }
-);
+  server.tool(
+    "list_sitemaps",
+    "List sitemaps for a GSC property",
+    { siteUrl: z.string().describe("Site URL") },
+    async ({ siteUrl }) => {
+      const res = await gsc.sitemaps.list({ siteUrl });
+      return {
+        content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }],
+      };
+    }
+  );
+
+  return server;
+}
 
 const app = express();
 app.use(express.json());
 
-const transports = {};
-
-app.get("/sse", async (req, res) => {
-    res.setHeader("X-Accel-Buffering", "no");
-    const transport = new SSEServerTransport("/messages", res);
-  
-  const transport = new SSEServerTransport("/messages", res);
-  transports[transport.sessionId] = transport;
-  res.on("close", () => delete transports[transport.sessionId]);
-  await server.connect(transport);
-});
-
-app.post("/messages", async (req, res) => {
-  const sessionId = req.query.sessionId;
-  const transport = transports[sessionId];
-  if (transport) {
-    await transport.handlePostMessage(req, res);
-  } else {
-    res.status(404).json({ error: "Session not found" });
+app.all("/mcp", async (req, res) => {
+  try {
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    const server = buildServer();
+    res.on("close", () => transport.close());
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } catch (err) {
+    console.error("MCP error:", err);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
 
