@@ -7,7 +7,7 @@ import { z } from "zod";
 const serviceAccountJson = process.env.GSC_SERVICE_ACCOUNT_JSON;
 if (!serviceAccountJson) throw new Error("GSC_SERVICE_ACCOUNT_JSON env var required");
 
-const credentials = JSON.parse(serviceAccountJson);
+const credentials = JSON.parse(serviceAccountJson.replace(/\n/g, '\\n'));
 
 const auth = new google.auth.GoogleAuth({
   credentials,
