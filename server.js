@@ -4,10 +4,10 @@ import { google } from "googleapis";
 import express from "express";
 import { z } from "zod";
 
-const serviceAccountJson = process.env.GSC_SERVICE_ACCOUNT_JSON;
-if (!serviceAccountJson) throw new Error("GSC_SERVICE_ACCOUNT_JSON env var required");
+const serviceAccountB64 = process.env.GSC_SERVICE_ACCOUNT_JSON;
+if (!serviceAccountB64) throw new Error("GSC_SERVICE_ACCOUNT_JSON env var required");
 
-const credentials = JSON.parse(serviceAccountJson.replace(/\n/g, '\\n'));
+const credentials = JSON.parse(Buffer.from(serviceAccountB64, 'base64').toString('utf8'));
 
 const auth = new google.auth.GoogleAuth({
   credentials,
